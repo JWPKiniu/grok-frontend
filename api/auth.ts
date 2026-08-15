@@ -4,7 +4,7 @@ import {
   isOwnerRequest,
   privateHeaders,
   verifyOwnerPassword,
-} from "../server/ownerAuth.ts";
+} from "../server/ownerAuth";
 
 function json(body: Record<string, string>, status: number, extraHeaders?: Record<string, string>): Response {
   return Response.json(body, {

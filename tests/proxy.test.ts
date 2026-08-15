@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyTargetUrl } from "../api/proxy.ts";
+import { classifyTargetUrl } from "../server/proxyPolicy.ts";
 
 test("proxy allows only the required xAI API methods and paths", () => {
   assert.equal(
