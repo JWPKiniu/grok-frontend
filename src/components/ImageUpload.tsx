@@ -2,17 +2,19 @@ import { useState, useCallback } from "react";
 
 type Props = {
   preview: string | null;
-  onFileSelect: (file: File) => void;
+  onFileSelect: (file: File) => void | Promise<void>;
   label?: string;
+  busy?: boolean;
+  hint?: string | null;
 };
 
-export default function ImageUpload({ preview, onFileSelect, label = "Image" }: Props) {
+export default function ImageUpload({ preview, onFileSelect, label = "Image", busy = false, hint }: Props) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const f = e.target.files?.[0];
-      if (f && f.type.startsWith("image/")) onFileSelect(f);
+      if (f) void onFileSelect(f);
       e.target.value = "";
     },
     [onFileSelect]
@@ -23,7 +25,7 @@ export default function ImageUpload({ preview, onFileSelect, label = "Image" }: 
       e.preventDefault();
       setIsDragging(false);
       const f = e.dataTransfer.files?.[0];
-      if (f && f.type.startsWith("image/")) onFileSelect(f);
+      if (f) void onFileSelect(f);
     },
     [onFileSelect]
   );
@@ -46,14 +48,21 @@ export default function ImageUpload({ preview, onFileSelect, label = "Image" }: 
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
+        aria-busy={busy}
       >
         <input
           type="file"
           accept="image/*"
           onChange={handleChange}
           className="upload-zone-input"
+          disabled={busy}
         />
-        {preview ? (
+        {busy ? (
+          <div className="upload-zone-empty">
+            <span className="spinner" />
+            <span className="upload-zone-text">Preparing image securely…</span>
+          </div>
+        ) : preview ? (
           <div className="upload-zone-preview">
             <img src={preview} alt="" className="upload-zone-thumb" />
             <span className="upload-zone-change">Change image</span>
@@ -71,6 +80,7 @@ export default function ImageUpload({ preview, onFileSelect, label = "Image" }: 
           </div>
         )}
       </div>
+      {hint && <small className="upload-hint">{hint}</small>}
     </label>
   );
 }

@@ -41,8 +41,13 @@
   color: var(--text);
   background: var(--accent-dim);
 }
-.nav-logout {
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   margin-left: auto;
+}
+.nav-logout, .nav-lock {
   font-size: 0.85rem;
   font-weight: 500;
   color: var(--text-2);
@@ -53,12 +58,14 @@
   cursor: pointer;
   transition: color 0.2s, border-color 0.2s, background 0.2s;
 }
-.nav-logout:hover {
+.nav-logout:hover, .nav-lock:hover {
   color: var(--error);
   border-color: var(--error);
   background: var(--error-bg);
   transform: none;
 }
+.nav-lock { color: var(--accent); }
+.nav-lock:hover { color: var(--accent-hover); border-color: var(--accent); background: var(--accent-dim); }
 
 /* ── Page ───────────────────────────────────── */
 .page { text-align: left; animation: fadeIn 0.2s ease; }
@@ -84,6 +91,9 @@
 }
 .login-card h1 { font-size: 1.6rem; margin-bottom: 0.4rem; }
 .login-card .subtitle { margin-bottom: 1.75rem; }
+.access-card { text-align: center; }
+.access-card .form { text-align: left; }
+.access-lock { font-size: 2rem; margin-bottom: 0.75rem; }
 
 .login-help { margin-bottom: 1.25rem; }
 .login-help-toggle {
@@ -236,6 +246,7 @@
 .upload-zone-thumb { max-width: 100%; max-height: 180px; border-radius: var(--r-sm); object-fit: contain; border: 1px solid var(--border); }
 .upload-zone-change { font-size: 0.85rem; color: var(--accent); }
 .upload-zone:hover .upload-zone-change { text-decoration: underline; }
+.upload-hint { color: var(--text-2); font-size: 0.78rem; line-height: 1.45; }
 
 /* ── Slider ─────────────────────────────────── */
 .slider {
@@ -308,17 +319,6 @@
   margin-top: 0.5rem;
 }
 
-/* ── Footer ─────────────────────────────────── */
-.footer-github {
-  display: flex;
-  justify-content: flex-end;
-  padding: 1.5rem 0 0.5rem;
-  margin-top: 2rem;
-  border-top: 1px solid var(--border);
-}
-.footer-github a { color: var(--text-3); display: block; transition: color 0.2s; }
-.footer-github a:hover { color: var(--text-2); }
-
 /* ── Page Header ────────────────────────────── */
 .page-header { margin-bottom: 2rem; }
 .page-header h1 { margin-bottom: 0.4rem; }
@@ -382,6 +382,10 @@
 
 /* ── Responsive ─────────────────────────────── */
 @media (max-width: 520px) {
+  .nav { flex-wrap: wrap; }
+  .nav-brand { width: 100%; border-right: none; padding-bottom: 0.4rem; }
+  .nav-actions { width: 100%; margin-left: 0; }
+  .nav-actions button { flex: 1; }
   .result-compare { grid-template-columns: 1fr; }
   .form-row { grid-template-columns: 1fr; }
   .form-card { padding: 1.25rem; }

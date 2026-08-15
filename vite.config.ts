@@ -1,10 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { proxyFetch } from './api/proxy'
+import { authFetch } from './api/auth'
 
 // https://vite.dev/config/
 // Dev middleware: shim that calls the same proxy handler as Vercel api/proxy.
 const PROXY_PREFIX = '/api/proxy'
+const AUTH_PREFIX = '/api/auth'
 
 export default defineConfig({
   plugins: [
@@ -13,7 +15,9 @@ export default defineConfig({
       name: 'proxy',
       configureServer(server) {
         server.middlewares.use(async (req, res, next) => {
-          if (!req.url?.startsWith(PROXY_PREFIX)) {
+          const isProxy = req.url?.startsWith(PROXY_PREFIX)
+          const isAuth = req.url?.startsWith(AUTH_PREFIX)
+          if (!isProxy && !isAuth) {
             next()
             return
           }
@@ -31,7 +35,7 @@ export default defineConfig({
           }
           const request = new Request(requestUrl, { method: req.method ?? 'GET', headers, body })
           try {
-            const response = await proxyFetch(request)
+            const response = isAuth ? await authFetch(request) : await proxyFetch(request)
             res.statusCode = response.status
             response.headers.forEach((v, k) => res.setHeader(k, v))
             res.end(Buffer.from(await response.arrayBuffer()))

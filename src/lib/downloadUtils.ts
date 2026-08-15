@@ -15,7 +15,8 @@ const MIME_TO_EXT: Record<string, string> = {
  */
 export function getDownloadFilename(
   url: string,
-  defaultName = "grok-image"
+  defaultName = "grok-image",
+  fallbackExtension = "png",
 ): string {
   const dataMatch = url.match(/^data:image\/(\w+);/);
   if (dataMatch) {
@@ -25,6 +26,10 @@ export function getDownloadFilename(
   }
   try {
     const u = new URL(url);
+    const proxiedTarget = u.pathname === "/api/proxy" ? u.searchParams.get("url") : null;
+    if (proxiedTarget && proxiedTarget !== url) {
+      return getDownloadFilename(proxiedTarget, defaultName, fallbackExtension);
+    }
     const segment = u.pathname.split("/").pop() ?? "";
     const dot = segment.lastIndexOf(".");
     if (dot > 0) {
@@ -34,5 +39,5 @@ export function getDownloadFilename(
   } catch {
     // ignore
   }
-  return `${defaultName}.png`;
+  return `${defaultName}.${fallbackExtension}`;
 }
