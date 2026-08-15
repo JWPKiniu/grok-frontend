@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { setGrokApiKey } from "../lib/grokApi";
-import { setApiKeyCookie } from "../lib/cookies";
+import { storeApiKey } from "../lib/apiKeyStorage";
 
 export default function Login() {
   const [key, setKey] = useState("");
@@ -18,7 +18,7 @@ export default function Login() {
       return;
     }
     setError(null);
-    setApiKeyCookie(trimmed);
+    storeApiKey(trimmed);
     setGrokApiKey(trimmed);
     const from = (location.state as { from?: { pathname: string } })?.from?.pathname ?? "/";
     navigate(from, { replace: true });
@@ -27,8 +27,8 @@ export default function Login() {
   return (
     <div className="page login-page">
     <div className="login-card">
-      <h1>Log in</h1>
-      <p className="subtitle">Enter your xAI API key to use Image to Image, Text to Image, and Image to Video.</p>
+      <h1>Connect xAI</h1>
+      <p className="subtitle">Enter your xAI API key. It stays only in this browser tab and is cleared when the tab is closed or the app is locked.</p>
 
       <div className="login-help">
         <button
@@ -42,7 +42,7 @@ export default function Login() {
         {helpOpen && (
           <div className="login-explanation">
             <p>
-              <strong>What is this?</strong> It’s like a password that lets this app use xAI’s tools to generate or edit images and videos for you. The app only stores it on your device. Due to technical limitations (xAI asks the browser to block direct requests — CORS), the key is sent to this app's proxy, which forwards it to xAI; the proxy does not log or store your key.
+              <strong>What is this?</strong> It’s like a password that lets this app use xAI’s tools. The key stays in this tab, travels only through the app’s private proxy to xAI, and is never logged or saved by this app.
             </p>
             <p>
               <strong>How do I get one?</strong> Go to the{" "}
@@ -71,7 +71,7 @@ export default function Login() {
             autoFocus
           />
         </label>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <button type="submit" className="primary-button">
           Continue
         </button>

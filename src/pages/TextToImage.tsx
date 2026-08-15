@@ -50,6 +50,7 @@ export default function TextToImage() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="e.g. A collage of London landmarks in a stenciled street-art style"
+              maxLength={5000}
               rows={4}
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(); }}
             />
@@ -65,7 +66,7 @@ export default function TextToImage() {
         </div>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
     </div>
   );
 }

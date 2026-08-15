@@ -1,39 +1,43 @@
 let userApiKey: string | null = null;
 
-/** Set the API key from the UI input (overrides env). Pass null to clear. */
+const IMAGE_MODEL = "grok-imagine-image-quality";
+const VIDEO_MODEL = "grok-imagine-video-1.5";
+const PROXY_BASE = "/api/proxy";
+const XAI_MEDIA_HOSTS = new Set(["imgen.x.ai", "vidgen.x.ai"]);
+const IMAGE_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
+const VIDEO_REQUEST_TIMEOUT_MS = 60 * 1000;
+const VIDEO_POLL_TIMEOUT_MS = 30 * 1000;
+const VIDEO_TOTAL_TIMEOUT_MS = 15 * 60 * 1000;
+const VIDEO_POLL_INTERVAL_MS = 5 * 1000;
+
+/** Set the API key from the UI input. Pass null to clear it from memory. */
 export function setGrokApiKey(key: string | null): void {
   userApiKey = key?.trim() || null;
 }
 
 function getApiKey(): string {
-  if (!userApiKey) throw new Error("Grok API key is not set. Please log in.");
+  if (!userApiKey) throw new Error("The xAI API key is not set. Enter it again.");
   return userApiKey;
 }
 
-const getBaseUrl = () =>
-  import.meta.env.VITE_GROK_API_URL ?? "https://api.x.ai/v1";
-
-const PROXY_BASE = "/api/proxy";
-
-/** Build proxy URL: ?url=<encoded-full-target-url> */
 function proxyUrl(fullTargetUrl: string): string {
   return `${PROXY_BASE}?url=${encodeURIComponent(fullTargetUrl)}`;
 }
 
-const XAI_CDN_PREFIXES = ["https://imgen.x.ai/", "https://vidgen.x.ai/"];
-
-function useProxy(url: string): boolean {
-  return XAI_CDN_PREFIXES.some((p) => url.startsWith(p));
+function isAllowedMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && XAI_MEDIA_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
-/** Custom fetch so requests to imgen.x.ai and vidgen.x.ai go via our proxy (avoids CORS). */
-function grokFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-  if (useProxy(url)) return fetch(proxyUrl(url), init);
-  return fetch(input, init);
+function privateMediaUrl(value: string): string {
+  if (!isAllowedMediaUrl(value)) throw new Error("xAI returned an unsupported media URL.");
+  return proxyUrl(value);
 }
 
-/** User-facing error with optional full API body for display. */
 export interface GrokApiError extends Error {
   status?: number;
   responseBody?: string;
@@ -42,376 +46,309 @@ export interface GrokApiError extends Error {
 
 function statusMessage(status: number): string {
   switch (status) {
+    case 400:
+    case 422:
+      return "xAI rejected the request.";
     case 401:
-      return "Unauthorized — check your API key.";
+      return "Authentication failed. Check the private session and xAI API key.";
     case 403:
-      return "Forbidden — access denied.";
+      return "xAI denied access to this model or request.";
+    case 413:
+      return "The uploaded image is too large for the secure proxy.";
     case 429:
-      return "Rate limited — try again later.";
-    case 502:
-      return "Proxy or network error.";
+      return "xAI rate limit reached. Wait a moment and try again.";
     case 500:
     case 503:
-      return "Server error — try again later.";
+      return "xAI is temporarily unavailable. Try again shortly.";
+    case 502:
+    case 504:
+      return "The secure proxy could not reach xAI.";
     default:
-      return `Request failed (${status}).`;
+      return `The request failed (${status}).`;
   }
 }
 
-/** Extract a user-facing message from API errors; prefers full JSON when available. */
-function getErrorMessage(err: unknown): string {
-  if (err && typeof err === "object" && "responseBody" in err && "status" in err) {
-    const status = (err as { status?: number }).status;
-    const body = (err as { responseBody?: string }).responseBody;
-    const statusHint = status != null ? statusMessage(status) : "";
-    if (typeof body === "string" && body.trim()) {
+function extractApiMessage(value: unknown, depth = 0): string | null {
+  if (depth > 3) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed && trimmed.length <= 300 ? trimmed : null;
+  }
+  if (!value || typeof value !== "object") return null;
+
+  const object = value as Record<string, unknown>;
+  for (const key of ["error", "message", "detail"]) {
+    const message = extractApiMessage(object[key], depth + 1);
+    if (message) return message;
+  }
+  return null;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "status" in error) {
+    const apiError = error as GrokApiError;
+    const hint = typeof apiError.status === "number" ? statusMessage(apiError.status) : "Request failed.";
+    let detail = extractApiMessage(apiError.responseJson);
+    if (!detail && apiError.responseBody) {
       try {
-        const parsed = JSON.parse(body) as { error?: string | { message?: string }; code?: string };
-        const extracted =
-          typeof parsed.error === "string"
-            ? parsed.error
-            : parsed.error && typeof parsed.error === "object" && typeof parsed.error.message === "string"
-              ? parsed.error.message
-              : null;
-        const full = body.length > 500 ? body.slice(0, 500) + "…" : body;
-        if (extracted) return `${statusHint}\n${extracted}\n\nFull response:\n${full}`;
-        return `${statusHint}\n\nFull response:\n${body}`;
+        detail = extractApiMessage(JSON.parse(apiError.responseBody) as unknown);
       } catch {
-        return `${statusHint}\n\nRaw response:\n${body}`;
+        detail = extractApiMessage(apiError.responseBody);
       }
     }
-    return statusHint || "Request failed.";
+    return detail && !hint.toLowerCase().includes(detail.toLowerCase()) ? `${hint} ${detail}` : hint;
   }
-  if (err && typeof err === "object" && "responseBody" in err) {
-    const body = (err as { responseBody?: string }).responseBody;
-    if (typeof body === "string" && body.trim()) {
-      try {
-        const parsed = JSON.parse(body) as { error?: string | { message?: string } };
-        if (typeof parsed.error === "string") return parsed.error;
-        if (parsed.error && typeof parsed.error === "object" && typeof parsed.error.message === "string")
-          return parsed.error.message;
-        return `API error:\n${body}`;
-      } catch {
-        return body;
-      }
-    }
+
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return "The request timed out. Try again.";
   }
-  if (err && typeof err === "object" && "responseJson" in err) {
-    const json = (err as { responseJson?: unknown }).responseJson;
-    if (json !== undefined && json !== null) {
-      try {
-        const str = JSON.stringify(json, null, 2);
-        const obj = json as { error?: string | { message?: string } };
-        if (typeof obj.error === "string") return `${obj.error}\n\nFull response:\n${str}`;
-        if (obj.error && typeof obj.error === "object" && typeof obj.error.message === "string")
-          return `${obj.error.message}\n\nFull response:\n${str}`;
-        return `API error:\n${str}`;
-      } catch {
-        return String(json);
-      }
-    }
+  if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
+    return "Network error. Check the connection and try again.";
   }
-  if (err && typeof err === "object" && "data" in err) {
-    const data = (err as { data?: { error?: string | { message?: string } } }).data;
-    if (data && typeof data.error === "string") return data.error;
-    if (data?.error && typeof data.error === "object" && typeof data.error.message === "string")
-      return data.error.message;
-  }
-  if (err instanceof Error && err.message.trim().startsWith("{")) {
+  if (error instanceof Error) return error.message;
+  return "Request failed.";
+}
+
+function apiError(status: number, body: string): GrokApiError {
+  const error = new Error(`Request failed: ${status}`) as GrokApiError;
+  error.status = status;
+  error.responseBody = body || undefined;
+  if (body) {
     try {
-      const parsed = JSON.parse(err.message) as { error?: string | { message?: string } };
-      if (typeof parsed.error === "string") return parsed.error;
-      if (parsed.error && typeof parsed.error === "object" && typeof parsed.error.message === "string")
-        return parsed.error.message;
-      return `API error:\n${err.message}`;
+      error.responseJson = JSON.parse(body) as unknown;
     } catch {
-      // not JSON
+      // Plain-text upstream response.
     }
   }
-  if (err instanceof Error) {
-    if ("cause" in err && err.cause !== undefined) {
-      const fromCause = getErrorMessage(err.cause);
-      if (fromCause && fromCause !== "Request failed") return fromCause;
-    }
-    return err.message;
-  }
-  return "Request failed";
+  return error;
 }
 
-const PROXIED_API_PATHS = ["/images/generations", "/images/edits"];
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
 
-/** Low-level POST helper for image endpoints that returns raw response text and surfaces API errors. */
-async function xaiPostRaw(path: string, body: Record<string, unknown>): Promise<string> {
-  const useProxyApi = PROXIED_API_PATHS.includes(path);
-  const target = useProxyApi
-    ? proxyUrl(`https://api.x.ai/v1${path}`)
-    : `${getBaseUrl().replace(/\/$/, "")}${path}`;
-  const res = await grokFetch(target, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getApiKey()}`,
+async function xaiPostRaw(
+  path: "/images/generations" | "/images/edits" | "/videos/generations",
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<string> {
+  const response = await fetchWithTimeout(
+    proxyUrl(`https://api.x.ai/v1${path}`),
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${getApiKey()}`,
+      },
+      body: JSON.stringify(body),
+      credentials: "same-origin",
+      cache: "no-store",
     },
-    body: JSON.stringify(body),
-  });
+    timeoutMs,
+  );
 
-  const text = await res.text();
-  if (!res.ok) {
-    const apiErr: GrokApiError = new Error(`Request failed: ${res.status}`) as GrokApiError;
-    apiErr.status = res.status;
-    apiErr.responseBody = text || undefined;
-    try {
-      apiErr.responseJson = JSON.parse(text) as unknown;
-    } catch {
-      // leave responseJson undefined; getErrorMessage will use responseBody
-    }
-    throw apiErr;
-  }
-
+  const text = await response.text();
+  if (!response.ok) throw apiError(response.status, text);
   return text;
 }
 
-type ImageGenOutcome =
-  | { kind: "success"; dataUri: string }
+function detectImageMime(base64: string): string {
+  if (base64.startsWith("/9j/")) return "image/jpeg";
+  if (base64.startsWith("iVBOR")) return "image/png";
+  if (base64.startsWith("UklGR")) return "image/webp";
+  if (base64.startsWith("R0lGOD")) return "image/gif";
+  return "image/jpeg";
+}
+
+export type ImageGenOutcome =
+  | { kind: "success"; resultUrl: string }
   | { kind: "unknown_error"; message: string };
 
-/** Process raw image generation/edit response into success or unknown_error, surfacing raw body on unknown. */
-function processImageGenerationResponse(rawText: string): ImageGenOutcome {
+/** Accept both current URL responses and Base64 responses for backwards compatibility. */
+export function processImageGenerationResponse(rawText: string): ImageGenOutcome {
   let parsed: unknown;
-  if (rawText) {
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      parsed = undefined;
-    }
+  try {
+    parsed = JSON.parse(rawText) as unknown;
+  } catch {
+    return { kind: "unknown_error", message: "xAI returned an unreadable image response." };
   }
 
   if (parsed && typeof parsed === "object" && "data" in parsed) {
-    const data = parsed as {
-      data?: Array<{ b64_json?: string; mime_type?: string }>;
+    const response = parsed as {
+      data?: Array<{ b64_json?: string; mime_type?: string; url?: string }>;
     };
-    const first = data.data?.[0];
-    const b64 = first?.b64_json;
-    if (b64 && typeof b64 === "string") {
-      const mime = first.mime_type && /^image\/[a-z0-9+.-]+$/i.test(first.mime_type)
+    const first = response.data?.[0];
+    if (typeof first?.b64_json === "string" && first.b64_json) {
+      const mime = typeof first.mime_type === "string" && /^image\/[a-z0-9+.-]+$/i.test(first.mime_type)
         ? first.mime_type
-        : "image/png";
-      return { kind: "success", dataUri: `data:${mime};base64,${b64}` };
+        : detectImageMime(first.b64_json);
+      return { kind: "success", resultUrl: `data:${mime};base64,${first.b64_json}` };
+    }
+    if (typeof first?.url === "string" && isAllowedMediaUrl(first.url)) {
+      return { kind: "success", resultUrl: privateMediaUrl(first.url) };
     }
   }
 
-  // If the shape isn't what we expect, surface the raw response body so callers can see what went wrong.
   return {
     kind: "unknown_error",
-    message: rawText || "Unexpected image response format",
+    message: extractApiMessage(parsed) ?? "xAI returned an image response without an image.",
   };
 }
 
-/**
- * Text-to-image: POST /v1/images/generations, returns image as data URL.
- */
 export async function textToImage(prompt: string): Promise<string> {
   try {
-    const text = await xaiPostRaw("/images/generations", {
-      model: "grok-imagine-image",
-      prompt: prompt.trim(),
-      response_format: "b64_json",
-    });
-
-    const outcome = processImageGenerationResponse(text);
-    if (outcome.kind === "success") return outcome.dataUri;
-    throw new Error(outcome.message);
-  } catch (err) {
-    throw new Error(getErrorMessage(err));
-  }
-}
-
-/**
- * Image edit: POST /v1/images/edits with image (data URI or URL) + prompt, returns image as data URL.
- */
-export async function imageEdit(
-  prompt: string,
-  imageDataUri: string
-): Promise<string> {
-  try {
-    const text = await xaiPostRaw("/images/edits", {
-      model: "grok-imagine-image",
-      prompt: prompt.trim(),
-      image: {
-        url: imageDataUri,
-        type: "image_url",
+    const text = await xaiPostRaw(
+      "/images/generations",
+      {
+        model: IMAGE_MODEL,
+        prompt: prompt.trim(),
+        response_format: "url",
+        n: 1,
       },
-      response_format: "b64_json",
-    });
-
+      IMAGE_REQUEST_TIMEOUT_MS,
+    );
     const outcome = processImageGenerationResponse(text);
-    if (outcome.kind === "success") return outcome.dataUri;
+    if (outcome.kind === "success") return outcome.resultUrl;
     throw new Error(outcome.message);
-  } catch (err) {
-    throw new Error(getErrorMessage(err));
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
   }
 }
 
-const POLL_INTERVAL_MS = 3000;
+export async function imageEdit(prompt: string, imageDataUri: string): Promise<string> {
+  try {
+    const text = await xaiPostRaw(
+      "/images/edits",
+      {
+        model: IMAGE_MODEL,
+        prompt: prompt.trim(),
+        image: { url: imageDataUri, type: "image_url" },
+        response_format: "url",
+        n: 1,
+      },
+      IMAGE_REQUEST_TIMEOUT_MS,
+    );
+    const outcome = processImageGenerationResponse(text);
+    if (outcome.kind === "success") return outcome.resultUrl;
+    throw new Error(outcome.message);
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
+  }
+}
 
-type VideoPollOutcome =
+export type VideoPollOutcome =
   | { kind: "pending" }
   | { kind: "success"; videoUrl: string }
   | { kind: "known_error"; message: string }
   | { kind: "unknown_error"; message: string };
 
-/** Process raw video poll response text into one of: pending, success, known_error, unknown_error. */
-function processVideoPollResponse(rawText: string): VideoPollOutcome {
+export function processVideoPollResponse(rawText: string): VideoPollOutcome {
   let parsed: unknown;
-  if (rawText) {
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      parsed = undefined;
-    }
+  try {
+    parsed = JSON.parse(rawText) as unknown;
+  } catch {
+    return { kind: "unknown_error", message: "xAI returned an unreadable video response." };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return { kind: "unknown_error", message: "xAI returned an invalid video response." };
   }
 
-  const pollData = parsed;
-
-  // Helper to build a safe fallback message that prefers raw text
-  const fallback = (prefix: string): string => {
-    if (rawText) return `${prefix}: ${rawText}`;
-    try {
-      return `${prefix}: ${JSON.stringify(pollData)}`;
-    } catch {
-      return prefix;
-    }
-  };
-
-  // Completely unexpected type (e.g. non-JSON response)
-  if (pollData === null || typeof pollData !== "object") {
-    return {
-      kind: "unknown_error",
-      message: rawText || fallback("Unexpected video response format"),
-    };
-  }
-
-  const data = pollData as {
+  const data = parsed as {
     status?: string;
     video?: { url?: string };
-    error?: { code?: string; message?: string } | string;
+    error?: unknown;
+    message?: unknown;
   };
+  const status = data.status?.toLowerCase();
 
-  // In-progress states
-  if (data.status === "pending" || data.status === "processing" || data.status === "queued") {
+  if (["pending", "processing", "queued", "running"].includes(status ?? "")) {
     return { kind: "pending" };
   }
-
-  // Successful completion with URL
-  if (data.video?.url) {
-    return { kind: "success", videoUrl: data.video.url };
+  if (typeof data.video?.url === "string" && isAllowedMediaUrl(data.video.url)) {
+    return { kind: "success", videoUrl: privateMediaUrl(data.video.url) };
   }
-
-  // Known failure states with structured error
-  if (data.status === "failed" || data.status === "expired" || data.error) {
-    let message: string | undefined;
-
-    if (typeof data.error === "string") {
-      message = data.error;
-    } else if (data.error && typeof data.error === "object" && typeof data.error.message === "string") {
-      message = data.error.message;
-    } else if (data.status === "expired") {
-      message = "Video request expired";
-    } else if (data.status === "failed") {
-      message = "Video generation failed";
-    }
-
+  if (["failed", "expired", "cancelled", "canceled"].includes(status ?? "") || data.error) {
     return {
       kind: "known_error",
-      message: message ?? fallback("Video generation error"),
+      message: extractApiMessage(data.error)
+        ?? extractApiMessage(data.message)
+        ?? `Video generation ${status || "failed"}.`,
     };
   }
-
-  // Anything else is an unknown error shape
-  return {
-    kind: "unknown_error",
-    message: rawText || fallback("Unexpected video response format"),
-  };
+  if (status === "done") {
+    return { kind: "known_error", message: "xAI finished the request without a video URL." };
+  }
+  return { kind: "unknown_error", message: "xAI returned an unknown video status." };
 }
 
-/**
- * Image-to-video: HTTP POST to xAI /videos/generations, then poll until done.
- * Image can be a public URL or a base64 data URI. Aspect ratio is omitted (uses input image).
- * Returns a URL the frontend can use (proxy URL for vidgen.x.ai to avoid CORS).
- */
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 export async function imageToVideo(
   prompt: string,
   imageDataUri: string,
-  options?: { duration?: number; resolution?: string }
+  options?: { duration?: number; resolution?: string },
 ): Promise<string> {
-  const apiKey = getApiKey();
+  try {
+    const startText = await xaiPostRaw(
+      "/videos/generations",
+      {
+        model: VIDEO_MODEL,
+        prompt: prompt.trim(),
+        image: { url: imageDataUri },
+        duration: options?.duration ?? 5,
+        resolution: options?.resolution === "720p" ? "720p" : "480p",
+      },
+      VIDEO_REQUEST_TIMEOUT_MS,
+    );
 
-  const body: Record<string, unknown> = {
-    model: "grok-imagine-video",
-    prompt: prompt.trim(),
-    image: { url: imageDataUri },
-    duration: options?.duration ?? 5,
-    resolution: options?.resolution === "720p" ? "720p" : "480p",
-  };
-
-  const startRes = await fetch(proxyUrl("https://api.x.ai/v1/videos/generations"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!startRes.ok) {
-    const text = await startRes.text();
-    const apiErr: GrokApiError = new Error(`Request failed: ${startRes.status}`) as GrokApiError;
-    apiErr.status = startRes.status;
-    apiErr.responseBody = text || undefined;
+    let startData: { request_id?: unknown };
     try {
-      apiErr.responseJson = JSON.parse(text) as unknown;
+      startData = JSON.parse(startText) as { request_id?: unknown };
     } catch {
-      // non-JSON body
+      throw new Error("xAI returned an unreadable video-start response.");
     }
-    throw apiErr;
-  }
-
-  const startData = (await startRes.json()) as { request_id?: string };
-  const requestId = startData.request_id;
-  if (!requestId) throw new Error("No request_id in response");
-
-  // Poll indefinitely until we get a terminal outcome (success or error).
-  // Timeout behavior is controlled by the caller (e.g. abort signal), not here.
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const pollRes = await fetch(proxyUrl(`https://api.x.ai/v1/videos/${requestId}`), {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    const text = await pollRes.text();
-    if (!pollRes.ok) {
-      const apiErr: GrokApiError = new Error(`Poll failed: ${pollRes.status}`) as GrokApiError;
-      apiErr.status = pollRes.status;
-      apiErr.responseBody = text || undefined;
-      try {
-        apiErr.responseJson = JSON.parse(text) as unknown;
-      } catch {
-        // non-JSON body
-      }
-      throw apiErr;
+    if (typeof startData.request_id !== "string" || !startData.request_id) {
+      throw new Error("xAI did not return a video request ID.");
     }
 
-    const outcome = processVideoPollResponse(text);
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < VIDEO_TOTAL_TIMEOUT_MS) {
+      await wait(VIDEO_POLL_INTERVAL_MS);
+      const response = await fetchWithTimeout(
+        proxyUrl(`https://api.x.ai/v1/videos/${encodeURIComponent(startData.request_id)}`),
+        {
+          method: "GET",
+          headers: { Authorization: `Bearer ${getApiKey()}` },
+          credentials: "same-origin",
+          cache: "no-store",
+        },
+        VIDEO_POLL_TIMEOUT_MS,
+      );
+      const text = await response.text();
 
-    if (outcome.kind === "pending") {
-      // keep polling
-    } else if (outcome.kind === "success") {
-      const videoUrl = outcome.videoUrl;
-      return useProxy(videoUrl) ? proxyUrl(videoUrl) : videoUrl;
-    } else {
-      // known_error or unknown_error
+      if (response.status === 429 || response.status === 502 || response.status === 503) continue;
+      if (!response.ok) throw apiError(response.status, text);
+
+      const outcome = processVideoPollResponse(text);
+      if (outcome.kind === "pending") continue;
+      if (outcome.kind === "success") return outcome.videoUrl;
       throw new Error(outcome.message);
     }
 
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    throw new Error("Video generation took longer than 15 minutes and was stopped.");
+  } catch (error) {
+    throw new Error(getErrorMessage(error));
   }
 }

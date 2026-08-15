@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { imageEdit } from "../lib/grokApi";
 import { getDownloadFilename } from "../lib/downloadUtils";
+import { formatBytes, prepareImageForUpload } from "../lib/imagePreparation";
 import ImageUpload from "../components/ImageUpload";
 
 export default function ImageToImage() {
@@ -8,18 +9,27 @@ export default function ImageToImage() {
   const [prompt, setPrompt] = useState("");
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [preparingImage, setPreparingImage] = useState(false);
+  const [uploadHint, setUploadHint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const onFileSelect = useCallback((f: File) => {
-    if (!f.type.startsWith("image/")) {
-      setError("Please select an image file.");
-      return;
-    }
+  const onFileSelect = useCallback(async (file: File) => {
+    setPreparingImage(true);
     setError(null);
     setResultUrl(null);
-    const reader = new FileReader();
-    reader.onload = () => setPreview(reader.result as string);
-    reader.readAsDataURL(f);
+    setUploadHint(null);
+    try {
+      const prepared = await prepareImageForUpload(file);
+      setPreview(prepared.dataUrl);
+      setUploadHint(prepared.optimized
+        ? `Optimized locally: ${formatBytes(prepared.originalBytes)} → ${formatBytes(prepared.outputBytes)} (${prepared.width}×${prepared.height}).`
+        : `Ready: ${formatBytes(prepared.outputBytes)} (${prepared.width}×${prepared.height}).`);
+    } catch (err) {
+      setPreview(null);
+      setError(err instanceof Error ? err.message : "The image could not be prepared.");
+    } finally {
+      setPreparingImage(false);
+    }
   }, []);
 
   const submit = useCallback(async () => {
@@ -73,22 +83,28 @@ export default function ImageToImage() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="e.g. Change the sky to sunset and add birds"
+              maxLength={5000}
               rows={3}
             />
           </label>
-          <ImageUpload preview={preview} onFileSelect={onFileSelect} />
+          <ImageUpload
+            preview={preview}
+            onFileSelect={onFileSelect}
+            busy={preparingImage}
+            hint={uploadHint}
+          />
           <button
             type="button"
             className="primary-button"
             onClick={submit}
-            disabled={loading || !preview || !prompt.trim()}
+            disabled={loading || preparingImage || !preview || !prompt.trim()}
           >
             {loading ? <><span className="spinner" /> Generating…</> : "Generate image"}
           </button>
         </div>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
     </div>
   );
 }
