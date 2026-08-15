@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { verifyPasswordDigest } from "../server/ownerAuth.ts";
+import { verifyPasswordDigest } from "../api/auth.ts";
 
 const FIXTURE_HASH = "14102431862ea6b065e69f0784f69a410c4baa4a4d6c0891b333da3583dad22f";
 

@@ -54,7 +54,7 @@ Generate a high-entropy password and its digest locally:
 node -e 'const c=require("node:crypto");const p=c.randomBytes(24).toString("base64url");console.log("password:",p);console.log("sha256:",c.createHash("sha256").update(p).digest("hex"))'
 ```
 
-Keep the password private. Replace only `OWNER_PASSWORD_SHA256` in `server/ownerAuth.ts` with the generated digest.
+Keep the password private. Replace `OWNER_PASSWORD_SHA256` in both `api/auth.ts` and `api/proxy.ts` with the generated digest.
 
 ## Vercel deployment
 
